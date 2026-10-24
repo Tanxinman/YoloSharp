@@ -16,6 +16,7 @@ namespace YoloSharp.Models
             {
                 YoloType.Yolov5u => new Yolo.Yolov5u(this.config.NumberClass, end2end: config.End2End, device: this.config.Device, dtype: this.config.Dtype),
                 YoloType.Yolov8 => new Yolo.Yolov8(this.config.NumberClass, end2end: config.End2End, device: this.config.Device, dtype: this.config.Dtype),
+                YoloType.Yolov9 => new Yolo.Yolov9(this.config.NumberClass, end2end: config.End2End, device: this.config.Device, dtype: this.config.Dtype),
                 YoloType.Yolov11 => new Yolo.Yolov11(this.config.NumberClass, end2end: config.End2End, device: this.config.Device, dtype: this.config.Dtype),
                 YoloType.Yolov12 => new Yolo.Yolov12(this.config.NumberClass, end2end: config.End2End, device: this.config.Device, dtype: this.config.Dtype),
                 _ => throw new NotImplementedException(),

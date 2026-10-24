@@ -84,7 +84,7 @@ namespace YoloSharp.Models
                 Console.WriteLine($"  Shape mismatch: {skippedShape} (will be re-initialized)");
                 foreach (var s in skippedShapeSamples)
                 {
-                    //Console.WriteLine($"    {s}");
+                    Console.WriteLine($"    {s}");
                 }
             }
             if (skippedMissing > 0)
@@ -109,6 +109,11 @@ namespace YoloSharp.Models
 
         internal virtual void Train()
         {
+            // Fix: from-scratch training path（未走LoadModel）模型保持Float32，而数据按config.Dtype进入——
+            // CUDA上触发 "Input type (CUDABFloat16Type) and weight type (CUDAFloatType) should be the same"。
+            // LoadModel路径在 yolo.to(config.Dtype) 已转换；此处对从头训路径补齐同一转换。
+            yolo.to(config.Dtype);
+
             if (config.End2End)
             {
                 One2one_Init();

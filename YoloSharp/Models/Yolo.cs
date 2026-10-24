@@ -5,11 +5,11 @@ using YoloSharp.Types;
 
 namespace YoloSharp.Models
 {
-    internal class Yolo
+    internal partial class Yolo
     {
         public class Yolov8 : torch.nn.Module<torch.Tensor, (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)?>
         {
-            private ModuleList<torch.nn.Module> model;
+            protected ModuleList<torch.nn.Module> model;
             protected virtual int[] outputIndexs => new int[] { 4, 6, 9, 12, 15, 18, 21 };
             protected virtual int[] concatIndex => new int[] { 1, 0, 3, 2 };
 

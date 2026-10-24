@@ -7,8 +7,52 @@ namespace YoloSharpDemo
 {
     internal class Program
     {
+        /// <summary>无效任务×架构组合→弹窗说明原因（Windows），返回true=无效已提示</summary>
+        static bool WarnInvalidCombo(YoloType yolo, TaskType task)
+        {
+            string? why = (yolo, task) switch
+            {
+                (YoloType.Yolov9, TaskType.Obb) =>
+                    "官方 YOLOv9 (GELAN) 从未发布 OBB（旋转框）变体。\n" +
+                    "→ 请改用 Yolov8 / Yolov11 训练 OBB，或把 TaskType 改为 Detection。",
+                (YoloType.Yolov9, TaskType.Pose) =>
+                    "官方 YOLOv9 (GELAN) 从未发布 Pose（姿态估计）变体。\n" +
+                    "→ 请改用 Yolov8 / Yolov11 训练 Pose，或把 TaskType 改为 Detection。",
+                (YoloType.Yolov9, TaskType.Segmentation) =>
+                    "官方 YOLOv9 存在分割变体（yolov9-seg），但本 C# 移植版尚未实现。\n" +
+                    "→ 请暂用 Yolov8 / Yolov11 训练分割；v9-seg 头欢迎社区补充。",
+                (YoloType.Yolov9, TaskType.Classification) =>
+                    "官方 YOLOv9 存在分类变体（yolov9-cls），但本 C# 移植版尚未实现。\n" +
+                    "→ 请暂用 Yolov8 / Yolov11 训练分类；v9-cls 头欢迎社区补充。",
+                _ => null,
+            };
+            if (why == null) return false;
+
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("========================================");
+            Console.WriteLine($"ERROR 不支持的组合: {yolo} + {task}");
+            Console.WriteLine(why);
+            Console.WriteLine("========================================");
+            Console.ResetColor();
+            return true;
+        }
+
         static void Main(string[] args)
         {
+            // v9分割验证模式：v9seg <model.pt> <image>——加载yolov9-seg权重推理
+            if (args.Length >= 2 && args[0] == "v9seg")
+            {
+                RunV9Seg(args[1], args.Length > 2 ? args[2] : @"..\..\..\Assets\TestImage\trucks.jpg");
+                return;
+            }
+
+            // v9训练验证模式：v9train [epochs]——Yolov9(GELAN)从头训练dotav1（Detection），训练完推理trucks.jpg
+            if (args.Length > 0 && args[0] == "v9train")
+            {
+                RunV9Train(args.Length > 1 ? int.Parse(args[1]) : 1);
+                return;
+            }
+
             string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n-obb.pt"; // Pretrained model path.
             string predictImagePath = @"..\..\..\Assets\TestImage\trucks.jpg";
 
@@ -27,21 +71,22 @@ namespace YoloSharpDemo
                 RootPath = dataRootPath,
                 TrainDataPath = trainDataPath,
                 ValDataPath = valDataPath,
-                YoloType = YoloType.Yolov8,
+                YoloType = YoloType.Yolov8,   // default sample: v8+Obb (yolov8n-obb.pt below). YOLOv9 sample: run "v9train"
                 YoloSize = YoloSize.n,
                 TaskType = TaskType.Obb,
                 ImageSize = 640,
-                BatchSize = 16,
+                BatchSize = 8,
                 NumberClass = 15,
                 Workers = 4,
-                Epochs = 100,
+                Epochs = 10,
                 LearningRate = 2e-4f,
                 KeyPoint_Num = 17,
                 KeyPoint_Dim = 3,
                 CloseMosaic = 10,
             };
 
-            // Create a yolo task.
+            // Create a yolo task. (invalid task×arch combos are shown a warning popup here)
+            if (WarnInvalidCombo(config.YoloType, config.TaskType)) return;
             YoloTask yoloTask = new YoloTask(config);
 
             // Load pre-trained model. If you don't want to use pre-trained model, skip the step.
@@ -62,19 +107,19 @@ namespace YoloSharpDemo
                 float[] cxcywhr = new float[] { result.CenterX, result.CenterY, result.Width, result.Height, result.Radian };
                 float[] points = cxcywhr2xyxyxyxy(cxcywhr);
 
-                Point[] pts = new Point[4]
+                OpenCvSharp.Point[] pts = new OpenCvSharp.Point[4]
                 {
-                    new Point(points[0], points[1]),
-                    new Point(points[2], points[3]),
-                    new Point(points[4], points[5]),
-                    new Point(points[6], points[7]),
+                    new OpenCvSharp.Point(points[0], points[1]),
+                    new OpenCvSharp.Point(points[2], points[3]),
+                    new OpenCvSharp.Point(points[4], points[5]),
+                    new OpenCvSharp.Point(points[6], points[7]),
                 };
-                Cv2.Polylines(predictImage, new Point[][] { pts }, true, OpenCvSharp.Scalar.Red, 2);
+                Cv2.Polylines(predictImage, new OpenCvSharp.Point[][] { pts }, true, OpenCvSharp.Scalar.Red, 2);
                 string label = string.Format("{0}:{1:F1}%", result.ClassID, result.Score * 100);
 
-                Size textSize = Cv2.GetTextSize(label, HersheyFonts.HersheySimplex, 0.5, 1, out int baseline);
-                Cv2.Rectangle(predictImage, new Rect(new Point(result.X, result.Y - textSize.Height - baseline), new Size(textSize.Width, textSize.Height + baseline)), OpenCvSharp.Scalar.White, Cv2.FILLED);
-                Cv2.PutText(predictImage, label, new Point(result.X, result.Y - baseline), HersheyFonts.HersheySimplex, 0.5, OpenCvSharp.Scalar.Black, 1);
+                OpenCvSharp.Size textSize = Cv2.GetTextSize(label, HersheyFonts.HersheySimplex, 0.5, 1, out int baseline);
+                Cv2.Rectangle(predictImage, new Rect(new OpenCvSharp.Point(result.X, result.Y - textSize.Height - baseline), new OpenCvSharp.Size(textSize.Width, textSize.Height + baseline)), OpenCvSharp.Scalar.White, Cv2.FILLED);
+                Cv2.PutText(predictImage, label, new OpenCvSharp.Point(result.X, result.Y - baseline), HersheyFonts.HersheySimplex, 0.5, OpenCvSharp.Scalar.Black, 1);
                 Console.WriteLine(string.Format("LabelID:{0}, Score:{1:F1}%, CenterX:{2}, CenterY:{3}, Width:{4}, Height:{5}, R:{6:F3} rnd", result.ClassID, result.Score * 100, result.CenterX, result.CenterY, result.Width, result.Height, result.Radian));
 
                 // Draw mask
@@ -134,6 +179,64 @@ namespace YoloSharpDemo
                 cx - wHalf * cosR - hHalf * sinR,
                 cy - wHalf * sinR + hHalf * cosR,
             };
+        }
+
+        /// <summary>YOLOv9训练验证：GELAN骨架从头训练（Detection）dotav1→推理trucks.jpg</summary>
+        static void RunV9Train(int epochs)
+        {
+            Console.WriteLine("=== YOLOv9 (GELAN) train verification ===");
+            Config config = new Config
+            {
+                DeviceType = DeviceType.CUDA,
+                ScalarType = ScalarType.BFloat16,
+                RootPath = @"..\..\..\Assets\DataSets\dotav1",
+                TrainDataPath = @"train.txt",
+                ValDataPath = @"val.txt",
+                YoloType = YoloType.Yolov9,
+                YoloSize = YoloSize.s,
+                TaskType = TaskType.Detection,
+                ImageSize = 640,
+                BatchSize = 8,
+                NumberClass = 15,
+                Workers = 4,
+                Epochs = epochs,
+                LearningRate = 2e-4f,
+            };
+            if (WarnInvalidCombo(config.YoloType, config.TaskType)) return;
+            YoloTask yoloTask = new YoloTask(config);
+            yoloTask.Train();   // 从头训练（验证Train()路径的GELAN前向+反向）
+            Mat img = Cv2.ImRead(@"..\..\..\Assets\TestImage\trucks.jpg");
+            var results = yoloTask.ImagePredict(img);
+            Console.WriteLine($"v9train done: {results.Count} objects");
+            Console.WriteLine("=== v9train PASS ===");
+        }
+
+        /// <summary>YOLOv9-Segment验证：加载真实.pt权重（gelan-c-seg）→推理</summary>
+        static void RunV9Seg(string modelPath, string imagePath)
+        {
+            Console.WriteLine("=== YOLOv9-Segment (gelan-c-seg) 验证 ===");
+            Config config = new Config
+            {
+                DeviceType = DeviceType.CPU,
+                ScalarType = ScalarType.BFloat16,
+                YoloType = YoloType.Yolov9,
+                YoloSize = YoloSize.s,
+                TaskType = TaskType.Segmentation,
+                ImageSize = 640,
+                NumberClass = 1,
+            };
+            YoloTask yoloTask = new YoloTask(config);
+            yoloTask.LoadModel(modelPath);
+            Mat predictImage = Cv2.ImRead(imagePath);
+            if (predictImage.Empty()) { Console.WriteLine("FAIL: 图像读取失败 " + imagePath); return; }
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            List<YoloResult> results = yoloTask.ImagePredict(predictImage);
+            sw.Stop();
+            int withMask = results.Count(r => r.Mask != null);
+            Console.WriteLine($"推理: {results.Count} 个目标({withMask}个带mask), {sw.ElapsedMilliseconds}ms");
+            foreach (var r in results.Take(5))
+                Console.WriteLine($"ClassID:{r.ClassID} Score:{r.Score * 100:F1}% CX:{r.CenterX:F0} CY:{r.CenterY:F0} Mask:{r.Mask != null}");
+            Console.WriteLine(results.Count > 0 ? "=== v9seg PASS ===" : "=== v9seg FAIL(0目标) ===");
         }
 
     }

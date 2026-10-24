@@ -5,6 +5,69 @@ namespace YoloSharp.Modules
 {
 	internal class Head
 	{
+		/// <summary>
+		/// YOLOv9 Detect head — contributed back to the open-source YoloSharp project.
+		/// v9 yaml Detect over 6 inputs [aux(P3,P4,P5), main(P3,P4,P5)]; inference uses the
+		/// LAST 3 (main). Channel basis: cv2/cv3 built per-branch from its own ch (aux uses ch[0] basis,
+		/// matching official v9 Detect: c2/c3 from ch[0] for first half, c4/c5 from ch[nl] for second).
+		/// Weight layout verified 1:1 with real yolov9-s: cv2.{0..5}, cv3.{0..5}, dfl.
+		/// </summary>
+		internal class DetectV9 : Detect
+		{
+			internal DetectV9(int nc = 80, int[] ch = null, int reg_max = 16, torch.Device? device = null, torch.ScalarType? dtype = null)
+				: base(nc, reg_max, ch: ch?.Take(3).ToArray(), legacy: true, end2end: false, device: device, dtype: dtype)
+			{
+				// v9 Detect: nl=6——cv2/cv3共6组（权重名cv2.0..cv2.5）：前3=aux(ch=128,192,256)，后3=main。
+				// 基类已按ch[0]建了3组main（索引0..2→权重名cv2.0..2会与aux错位）——重建为6组：
+				// aux组按官方DualDetect用ch[0]基准c2/c3；main组按各自ch。此法保证state_dict名cv2.0..5与.pt一致。
+				var aux = ch.Take(3).ToArray();
+				var main = ch.Skip(3).Take(3).ToArray();
+				// 官方v9 Detect: c2/c3全部按ch[0]基准（aux与main同基准——实测权重cv3.4=128证实）
+				int cA2 = Math.Max(16, Math.Max(aux[0] / 4, reg_max * 4));
+				int cA3 = Math.Max(aux[0], Math.Min(Math.Max(nc * 2, 1), 128));
+				var all2 = new List<Sequential>();
+				var all3 = new List<Sequential>();
+				for (int i = 0; i < 3; i++)
+				{
+					all2.Add(torch.nn.Sequential(
+						new Convs.Conv(aux[i], cA2, 3, device: device, dtype: dtype),
+						new Convs.Conv(cA2, cA2, 3, device: device, dtype: dtype),
+						torch.nn.Conv2d(cA2, 4 * reg_max, 1, device: device, dtype: dtype)));
+					all3.Add(torch.nn.Sequential(
+						new Convs.Conv(aux[i], cA3, 3, device: device, dtype: dtype),
+						new Convs.Conv(cA3, cA3, 3, device: device, dtype: dtype),
+						torch.nn.Conv2d(cA3, nc, 1, device: device, dtype: dtype)));
+				}
+				for (int i = 0; i < 3; i++)
+				{
+					all2.Add(torch.nn.Sequential(
+						new Convs.Conv(main[i], cA2, 3, device: device, dtype: dtype),
+						new Convs.Conv(cA2, cA2, 3, device: device, dtype: dtype),
+						torch.nn.Conv2d(cA2, 4 * reg_max, 1, device: device, dtype: dtype)));
+					all3.Add(torch.nn.Sequential(
+						new Convs.Conv(main[i], cA3, 3, device: device, dtype: dtype),
+						new Convs.Conv(cA3, cA3, 3, device: device, dtype: dtype),
+						torch.nn.Conv2d(cA3, nc, 1, device: device, dtype: dtype)));
+				}
+				cv2 = torch.nn.ModuleList(all2.ToArray());
+				cv3 = torch.nn.ModuleList(all3.ToArray());
+				RegisterComponents();
+			}
+
+			public override (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds) forward(torch.Tensor[] x)
+			{
+				// v9: 输入6分支 [aux(28,25,22), main(15,18,21)]——推理仅用后3（main，对应cv2/cv3索引3..5）
+				var main = new torch.Tensor[] { x[x.Length - 3], x[x.Length - 2], x[x.Length - 1] };
+				var savedCv2 = this.cv2; var savedCv3 = this.cv3;
+				// 基类forward_head遍历0..nl-1用cv2[i]——nl=3，喂main时需用索引3..5
+				var sub2 = torch.nn.ModuleList(new Sequential[] { savedCv2[3], savedCv2[4], savedCv2[5] });
+				var sub3 = torch.nn.ModuleList(new Sequential[] { savedCv3[3], savedCv3[4], savedCv3[5] });
+				this.cv2 = sub2; this.cv3 = sub3;
+				try { return base.forward(main); }
+				finally { this.cv2 = savedCv2; this.cv3 = savedCv3; }
+			}
+		}
+
 		internal class Detect : torch.nn.Module<torch.Tensor[], (Dictionary<string, torch.Tensor> inference, Dictionary<string, object> preds)>
 		{
 			private long[] shape = null;
