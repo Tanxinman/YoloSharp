@@ -18,9 +18,6 @@ namespace YoloSharpDemo
                 (YoloType.Yolov9, TaskType.Pose) =>
                     "官方 YOLOv9 (GELAN) 从未发布 Pose（姿态估计）变体。\n" +
                     "→ 请改用 Yolov8 / Yolov11 训练 Pose，或把 TaskType 改为 Detection。",
-                (YoloType.Yolov9, TaskType.Segmentation) =>
-                    "官方 YOLOv9 存在分割变体（yolov9-seg），但本 C# 移植版尚未实现。\n" +
-                    "→ 请暂用 Yolov8 / Yolov11 训练分割；v9-seg 头欢迎社区补充。",
                 (YoloType.Yolov9, TaskType.Classification) =>
                     "官方 YOLOv9 存在分类变体（yolov9-cls），但本 C# 移植版尚未实现。\n" +
                     "→ 请暂用 Yolov8 / Yolov11 训练分类；v9-cls 头欢迎社区补充。",

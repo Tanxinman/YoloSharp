@@ -61,7 +61,15 @@ namespace YoloSharp.Models
 
                 if (!modelShapes.TryGetValue(name, out var expectedShape))
                 {
-                    skippedMissing++;
+                    // [Fix 2026-10-24] 非参数缓冲不计入"头不匹配"（needHeadInit）：
+                    // stride/class_weights/angle（OBB头的角度维度标记）在C#骨架上无对应buffer，
+                    // 但它们不是可训练权重——旧逻辑把它们算作missing，导致加载预训练后
+                    // Bias_Init()重置整个Detect头（实测：v8n-obb.pt 397/400迁移，3个missing
+                    // 全是非权重缓冲，却触发头重置→epoch1 mAP50从Python的0.94跌到0.41）
+                    if (!name.EndsWith("class_weights") && !name.EndsWith("stride") && !name.EndsWith("angle"))
+                    {
+                        skippedMissing++;
+                    }
                     continue;
                 }
 
@@ -188,9 +196,11 @@ namespace YoloSharp.Models
 
             torch.optim.Optimizer optimizer = new AdamW(new AdamW.ParamGroup[] { weightGroup, bnWeightGroup, biasGroup });
 
-            long nb_estimate = trainDataLoader.Count;
-            float tau = Math.Max(100f, nb_estimate * 10f);
-            ema = new ModelEMA(yolo, decay: 0.999f, tau: tau);
+            // nb_estimate已无需用于EMA tau（对齐官方固定2000）
+            // [Fix 2026-10-24] EMA对齐ultralytics官方：decay=0.9999, tau=2000固定。
+            // 旧值(0.999, nb*10)使EMA有效平均窗口≈10epoch——前20轮val指标严重滞后(与Python差异大的根因)
+            // [Fix 2026-10-24] EMA对齐ultralytics官方：decay=0.9999, tau=2000固定。
+            ema = new ModelEMA(yolo, decay: 0.9999f, tau: 2000f);
 
             Func<int, double> lrLambda = config.UseCosLR ?
                 OneCycle(1.0, config.Lrf, config.Epochs) :
