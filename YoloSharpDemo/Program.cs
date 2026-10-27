@@ -36,19 +36,24 @@ namespace YoloSharpDemo
 
         static void Main(string[] args)
         {
-            // v9分割验证模式：v9seg <model.pt> <image>——加载yolov9-seg权重推理
-            if (args.Length >= 2 && args[0] == "v9seg")
-            {
-                RunV9Seg(args[1], args.Length > 2 ? args[2] : @"..\..\..\Assets\TestImage\trucks.jpg");
-                return;
-            }
-
-            // v9训练验证模式：v9train [epochs]——Yolov9(GELAN)从头训练dotav1（Detection），训练完推理trucks.jpg
-            if (args.Length > 0 && args[0] == "v9train")
-            {
-                RunV9Train(args.Length > 1 ? int.Parse(args[1]) : 1);
-                return;
-            }
+            // 统一入口（v8/v9/v11/v12同一流程，仅Config不同）：
+            //   YoloSharpDemo [yoloType] [task] [predictImgsz] [predictConf] [epochs]
+            //   yoloType:     Yolov5u/Yolov8/Yolov9/Yolov11/Yolov12（默认Yolov8）
+            //   task:         Detection/Obb/Segmentation/Pose/Classification（默认Obb——沿用示例数据集dotav1）
+            //   predictImgsz: 推理输入尺寸（letterbox等比缩放目标，需32倍数，默认640）
+            //                 ——应与训练尺寸一致；训练1280的模型推理传1280，否则精度下降
+            //   predictConf:  置信度阈值（默认0.45）
+            //   epochs:       训练轮数（默认10；dotav1-obb/v9示例均适用）
+            // 例：
+            //   YoloSharpDemo                              → v8+Obb 默认（训练+推理）
+            //   YoloSharpDemo Yolov9 Detection             → v9 从头训练dotav1+推理
+            //   YoloSharpDemo Yolov8 Obb 1280 0.3          → v8 训练后按1280推理、conf=0.3
+            //   YoloSharpDemo Yolov9 Segmentation          → v9-seg（需自备权重路径见下）
+            YoloType yoloType = args.Length > 0 ? (YoloType)Enum.Parse(typeof(YoloType), args[0], true) : YoloType.Yolov8;
+            TaskType taskType = args.Length > 1 ? (TaskType)Enum.Parse(typeof(TaskType), args[1], true) : TaskType.Obb;
+            int predictImgsz = args.Length > 2 ? int.Parse(args[2]) : 0;   // 0=用config.ImageSize
+            float predictConf = args.Length > 3 ? float.Parse(args[3]) : 0.45f;
+            int epochs = args.Length > 4 ? int.Parse(args[4]) : 10;
 
             string preTrainedModelPath = @"..\..\..\Assets\PreTrainedModels\yolov8n-obb.pt"; // Pretrained model path.
             string predictImagePath = @"..\..\..\Assets\TestImage\trucks.jpg";
@@ -60,7 +65,9 @@ namespace YoloSharpDemo
 
             Mat predictImage = Cv2.ImRead(predictImagePath);
 
-            // Create a Yolo config
+            // Create a Yolo config（任务相关参数按task自动适配；v9等无预训练权重的架构从头训练）
+            // nc: 示例数据集dotav1为15类（train.txt/val.txt标签0..14）；Classification任务无框标签按1类
+            int nc = taskType == TaskType.Classification ? 1 : 15;
             Config config = new Config
             {
                 DeviceType = DeviceType.CUDA,
@@ -68,14 +75,14 @@ namespace YoloSharpDemo
                 RootPath = dataRootPath,
                 TrainDataPath = trainDataPath,
                 ValDataPath = valDataPath,
-                YoloType = YoloType.Yolov8,   // default sample: v8+Obb (yolov8n-obb.pt below). YOLOv9 sample: run "v9train"
-                YoloSize = YoloSize.n,
-                TaskType = TaskType.Obb,
+                YoloType = yoloType,
+                YoloSize = yoloType == YoloType.Yolov9 ? YoloSize.s : YoloSize.n,   // v9官方最小为s
+                TaskType = taskType,
                 ImageSize = 640,
                 BatchSize = 8,
-                NumberClass = 15,
+                NumberClass = nc,
                 Workers = 4,
-                Epochs = 10,
+                Epochs = epochs,
                 LearningRate = 2e-4f,
                 KeyPoint_Num = 17,
                 KeyPoint_Dim = 3,
@@ -86,14 +93,18 @@ namespace YoloSharpDemo
             if (WarnInvalidCombo(config.YoloType, config.TaskType)) return;
             YoloTask yoloTask = new YoloTask(config);
 
-            // Load pre-trained model. If you don't want to use pre-trained model, skip the step.
-            yoloTask.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
+            // Load pre-trained model (skip for architectures without one in Assets — trains from scratch).
+            if (System.IO.File.Exists(preTrainedModelPath))
+                yoloTask.LoadModel(preTrainedModelPath, skipNcNotEqualLayers: true);
 
             // Train model
             yoloTask.Train();
 
             // Predict image, if the model is not trained or loaded, it will use random weight to predict.
-            List<YoloResult> predictResult = yoloTask.ImagePredict(predictImage);
+            // [predict带参] imgsz显式传入时覆盖config（训练1280的模型推理传1280）；conf可调阈值
+            if (predictImgsz >= 32) config.ImageSize = predictImgsz - predictImgsz % 32;
+            Console.WriteLine($"Predict {yoloType}+{taskType} imgsz={config.ImageSize} conf={predictConf}");
+            List<YoloResult> predictResult = yoloTask.ImagePredict(predictImage, predictConf, 0.5f);
 
             // Rand for mask color.
             Random rand = new Random(1024);
@@ -179,63 +190,6 @@ namespace YoloSharpDemo
         }
 
         /// <summary>YOLOv9训练验证：GELAN骨架从头训练（Detection）dotav1→推理trucks.jpg</summary>
-        static void RunV9Train(int epochs)
-        {
-            Console.WriteLine("=== YOLOv9 (GELAN) train verification ===");
-            Config config = new Config
-            {
-                DeviceType = DeviceType.CUDA,
-                ScalarType = ScalarType.BFloat16,
-                RootPath = @"..\..\..\Assets\DataSets\dotav1",
-                TrainDataPath = @"train.txt",
-                ValDataPath = @"val.txt",
-                YoloType = YoloType.Yolov9,
-                YoloSize = YoloSize.s,
-                TaskType = TaskType.Detection,
-                ImageSize = 640,
-                BatchSize = 8,
-                NumberClass = 15,
-                Workers = 4,
-                Epochs = epochs,
-                LearningRate = 2e-4f,
-            };
-            if (WarnInvalidCombo(config.YoloType, config.TaskType)) return;
-            YoloTask yoloTask = new YoloTask(config);
-            yoloTask.Train();   // 从头训练（验证Train()路径的GELAN前向+反向）
-            Mat img = Cv2.ImRead(@"..\..\..\Assets\TestImage\trucks.jpg");
-            var results = yoloTask.ImagePredict(img);
-            Console.WriteLine($"v9train done: {results.Count} objects");
-            Console.WriteLine("=== v9train PASS ===");
-        }
-
-        /// <summary>YOLOv9-Segment验证：加载真实.pt权重（gelan-c-seg）→推理</summary>
-        static void RunV9Seg(string modelPath, string imagePath)
-        {
-            Console.WriteLine("=== YOLOv9-Segment (gelan-c-seg) 验证 ===");
-            Config config = new Config
-            {
-                DeviceType = DeviceType.CPU,
-                ScalarType = ScalarType.BFloat16,
-                YoloType = YoloType.Yolov9,
-                YoloSize = YoloSize.s,
-                TaskType = TaskType.Segmentation,
-                ImageSize = 640,
-                NumberClass = 1,
-            };
-            YoloTask yoloTask = new YoloTask(config);
-            yoloTask.LoadModel(modelPath);
-            Mat predictImage = Cv2.ImRead(imagePath);
-            if (predictImage.Empty()) { Console.WriteLine("FAIL: 图像读取失败 " + imagePath); return; }
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            List<YoloResult> results = yoloTask.ImagePredict(predictImage);
-            sw.Stop();
-            int withMask = results.Count(r => r.Mask != null);
-            Console.WriteLine($"推理: {results.Count} 个目标({withMask}个带mask), {sw.ElapsedMilliseconds}ms");
-            foreach (var r in results.Take(5))
-                Console.WriteLine($"ClassID:{r.ClassID} Score:{r.Score * 100:F1}% CX:{r.CenterX:F0} CY:{r.CenterY:F0} Mask:{r.Mask != null}");
-            Console.WriteLine(results.Count > 0 ? "=== v9seg PASS ===" : "=== v9seg FAIL(0目标) ===");
-        }
-
     }
 }
 

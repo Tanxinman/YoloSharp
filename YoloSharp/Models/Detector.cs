@@ -28,25 +28,31 @@ namespace YoloSharp.Models
         {
             using (torch.no_grad())
             {
-                // Change RGB → BGR
-                orgImage = orgImage.to(config.Dtype, config.Device).unsqueeze(0);
-                int w = (int)orgImage.shape[3];
-                int h = (int)orgImage.shape[2];
-                int padHeight = 32 - (int)(orgImage.shape[2] % 32);
-                int padWidth = 32 - (int)(orgImage.shape[3] % 32);
+                // [Fix 2026-10-27] 推理预处理与训练/val对齐（等比缩放letterbox）：
+                // 训练val管线=等比缩放到imgsz长边→pad灰到32倍数；旧推理=原图仅pad32。
+                // 宽高比悬殊图（如沟槽棒1190x256≈4.65:1）两分布完全不同→从头训的模型
+                // 在推理输入上置信度崩塌→0目标（预训练模型因特征鲁棒侥幸出框）。
+                orgImage = orgImage.to(config.Dtype, config.Device);
+                // 兼容CHW(3维)与NCHW(4维)入参：read_image产物是CHW——统一按最后两维取H/W
+                int dimC = (int)orgImage.dim();
+                int orgH = (int)orgImage.shape[dimC - 2];
+                int orgW = (int)orgImage.shape[dimC - 1];
+                float ratio = Math.Min(config.ImageSize / (float)orgH, config.ImageSize / (float)orgW);
+                int rsH = (int)(ratio * orgH);
+                int rsW = (int)(ratio * orgW);
+                var batched = orgImage.dim() == 3 ? orgImage.unsqueeze(0) : orgImage;
+                using (var resized = torch.nn.functional.interpolate(batched,
+                    new long[] { rsH, rsW }, mode: torch.InterpolationMode.Bilinear, align_corners: false))
+                {
+                    int padH = (32 - rsH % 32) % 32;
+                    int padW = (32 - rsW % 32) % 32;
+                    torch.Tensor input = torch.nn.functional.pad(resized, new long[] { 0, padW, 0, padH }, PaddingModes.Zeros, 114) / 255.0f;
+                    yolo.eval();
 
-                padHeight = padHeight == 32 ? 0 : padHeight;
-                padWidth = padWidth == 32 ? 0 : padWidth;
+                    Dictionary<string, torch.Tensor> inference = yolo.forward(input)?.inference;
 
-                torch.Tensor input = torch.nn.functional.pad(orgImage, new long[] { 0, padWidth, 0, padHeight }, PaddingModes.Zeros, 114) / 255.0f;
-                yolo.eval();
-
-
-                //Tensor[] tensors = yolo.forward(input);
-                Dictionary<string, torch.Tensor> inference = yolo.forward(input)?.inference;
-
-                torch.Tensor nms_results = Ops.non_max_suppression(inference["boxes"], predictThreshold, iouThreshold, end2end: config.End2End).output[0];
-                List<YoloResult> results = new List<YoloResult>();
+                    torch.Tensor nms_results = Ops.non_max_suppression(inference["boxes"], predictThreshold, iouThreshold, end2end: config.End2End).output[0];
+                    List<YoloResult> results = new List<YoloResult>();
                 for (int i = 0; i < nms_results.shape[0]; i++)
                 {
                     int x = nms_results[i][0].ToInt32();
@@ -57,17 +63,19 @@ namespace YoloSharp.Models
                     float score = nms_results[i][4].ToSingle();
                     int sort = nms_results[i][5].ToInt32();
 
+                    // [Fix] 坐标反映射：网络输入(等比缩放)→原图坐标系（除以ratio还原尺度）
                     results.Add(new YoloResult()
                     {
                         ClassID = sort,
                         Score = score,
-                        CenterX = x + rw / 2,
-                        CenterY = y + rh / 2,
-                        Width = rw,
-                        Height = rh
+                        CenterX = (int)(x + rw / 2 / ratio),
+                        CenterY = (int)(y + rh / 2 / ratio),
+                        Width = (int)(rw / ratio),
+                        Height = (int)(rh / ratio)
                     });
+                    }
+                    return results;
                 }
-                return results;
             }
         }
 
